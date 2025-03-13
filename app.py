@@ -1,8 +1,8 @@
 import os
-import requests
 from flask import Flask, render_template, request, flash
 from bs4 import BeautifulSoup
 from newspaper import Article
+from transformers import BartForConditionalGeneration, BartTokenizer
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -11,11 +11,12 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "your_secret_key")
 
-# Hugging Face Inference API configuration
-HUGGINGFACE_API_TOKEN = os.getenv("HUGGINGFACE_API_TOKEN", "")
-API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-cnn"
-
-headers = {"Authorization": f"Bearer {HUGGINGFACE_API_TOKEN}"}
+# Load DistilBART model and tokenizer at startup
+MODEL_NAME = "sshleifer/distilbart-cnn-12-6"
+print(f"Loading model: {MODEL_NAME}")
+tokenizer = BartTokenizer.from_pretrained(MODEL_NAME)
+model = BartForConditionalGeneration.from_pretrained(MODEL_NAME)
+print("Model loaded successfully")
 
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 
@@ -29,6 +30,7 @@ def fetch_articles(query=""):
            f"https://newsapi.org/v2/everything?q=india&language=en&apiKey={NEWS_API_KEY}")
 
     try:
+        import requests
         response = requests.get(url)
         print("Status Code:", response.status_code)
         response.raise_for_status()
@@ -57,24 +59,26 @@ def fetch_article_content(url):
         return "Content not available.", None
 
 def summarize_text(text):
-    """Summarize the article content using Hugging Face Inference API"""
-    truncated_text = " ".join(text.split()[:512])  # Truncate to avoid API input limits
-    input_text = truncated_text
-    word_count = len(text.split())
-    max_len = max(30, min(140, word_count // 2)) if word_count > 10 else 20
-
+    """Summarize the article content using local DistilBART model"""
     try:
-        response = requests.post(API_URL, headers=headers, json={"inputs": input_text, "parameters": {"max_length": max_len, "min_length": max(10, max_len // 2), "do_sample": False}})
-        response.raise_for_status()
-        summary = response.json()
-        if isinstance(summary, str):
-            return summary
-        elif isinstance(summary, list) and len(summary) > 0:
-            return summary[0]["summary_text"]
-        else:
-            return "Summary unavailable."
-    except requests.RequestException as e:
-        return f"Summary unavailable: {str(e)}"
+        truncated_text = " ".join(text.split()[:512])  # Limit input size
+        inputs = tokenizer(truncated_text, return_tensors="pt", max_length=1024, truncation=True)
+        word_count = len(text.split())
+        max_len = max(30, min(140, word_count // 2)) if word_count > 10 else 20
+
+        summary_ids = model.generate(
+            inputs["input_ids"],
+            max_length=max_len,
+            min_length=max(10, max_len // 2),
+            do_sample=False,
+            num_beams=4,  # Beam search for better quality
+            early_stopping=True
+        )
+        summary = tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+        return summary
+    except Exception as e:
+        print(f"Error summarizing text: {str(e)}")
+        return "Summary unavailable."
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
