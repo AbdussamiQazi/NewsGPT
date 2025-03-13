@@ -30,11 +30,11 @@ def fetch_articles(query=""):
 
     try:
         response = requests.get(url)
-        print("API URL:", url)
+        #print("API URL:", url)
         print("Status Code:", response.status_code)
         response.raise_for_status()
         data = response.json()
-        print("API Response:", data)
+        #print("API Response:", data)
 
         if data.get("status") != "ok":
             flash(f"API error: {data.get('message', 'Unknown error')}", "danger")
