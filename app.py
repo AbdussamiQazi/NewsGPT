@@ -17,13 +17,13 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
-# Download NLTK punkt_tab data if not present
+# Download NLTK punkt data if not present
 try:
-    nltk.data.find('tokenizers/punkt_tab')
+    nltk.data.find('tokenizers/punkt')
 except LookupError:
-    logger.info("Downloading NLTK punkt_tab data...")
-    nltk.download('punkt_tab', quiet=True)
-    logger.info("NLTK punkt_tab data downloaded successfully")
+    logger.info("Downloading NLTK punkt data...")
+    nltk.download('punkt', quiet=True)
+    logger.info("NLTK punkt data downloaded successfully")
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "your_secret_key")
