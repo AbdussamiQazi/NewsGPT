@@ -4,7 +4,9 @@ import requests
 from flask import Flask, render_template, request, flash
 from bs4 import BeautifulSoup
 from newspaper import Article
-from transformers import BartForConditionalGeneration, BartTokenizer
+from sumy.parsers.plaintext import PlaintextParser
+from sumy.nlp.tokenizers import Tokenizer
+from sumy.summarizers.lsa import LsaSummarizer
 from dotenv import load_dotenv
 
 # Configure logging
@@ -17,25 +19,7 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "your_secret_key")
 
-# Lazy-load DistilBART model and tokenizer
-MODEL_NAME = "sshleifer/distilbart-cnn-6-6"  # Even smaller than 12-6 (~300 MB)
-model = None
-tokenizer = None
-
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
-
-def load_model():
-    """Load the model and tokenizer lazily"""
-    global model, tokenizer
-    if model is None or tokenizer is None:
-        logger.info(f"Loading model: {MODEL_NAME}")
-        try:
-            tokenizer = BartTokenizer.from_pretrained(MODEL_NAME)
-            model = BartForConditionalGeneration.from_pretrained(MODEL_NAME)
-            logger.info("Model loaded successfully")
-        except Exception as e:
-            logger.error(f"Failed to load model: {str(e)}")
-            raise
 
 def fetch_articles(query=""):
     """Fetch top news articles or based on search query"""
@@ -48,7 +32,7 @@ def fetch_articles(query=""):
            f"https://newsapi.org/v2/everything?q=india&language=en&apiKey={NEWS_API_KEY}")
 
     try:
-        response = requests.get(url, timeout=10)  # Add timeout for reliability
+        response = requests.get(url, timeout=10)
         logger.info(f"Fetching articles from {url}, Status Code: {response.status_code}")
         response.raise_for_status()
         data = response.json()
@@ -76,31 +60,20 @@ def fetch_article_content(url):
         article.parse()
         text = article.text.strip()
         image = article.top_image or "https://via.placeholder.com/150"
-        return text[:2000], image  # Limit text size to save memory
+        return text[:2000], image  # Limit text size
     except Exception as e:
         logger.error(f"Error fetching content from {url}: {str(e)}")
         return "Content not available.", None
 
 def summarize_text(text):
-    """Summarize the article content using local DistilBART model"""
-    load_model()  # Ensure model is loaded
+    """Summarize the article content using sumy LSA"""
     try:
-        truncated_text = " ".join(text.split()[:256])  # Reduce input size
-        inputs = tokenizer(truncated_text, return_tensors="pt", max_length=512, truncation=True)
-        word_count = len(text.split())
-        max_len = max(20, min(100, word_count // 3))  # Tighter summary length
-
-        summary_ids = model.generate(
-            inputs["input_ids"],
-            max_length=max_len,
-            min_length=max(10, max_len // 2),
-            do_sample=False,
-            num_beams=2,  # Reduce beams for speed/memory
-            early_stopping=True
-        )
-        summary = tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+        parser = PlaintextParser.from_string(text[:512], Tokenizer("english"))
+        summarizer = LsaSummarizer()
+        summary = summarizer(parser.document, 2)  # 2 sentences
+        summary_text = " ".join(str(sentence) for sentence in summary)
         logger.info("Summary generated successfully")
-        return summary
+        return summary_text
     except Exception as e:
         logger.error(f"Error summarizing text: {str(e)}")
         return "Summary unavailable."
