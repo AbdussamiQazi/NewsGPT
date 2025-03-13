@@ -1,7 +1,6 @@
 Flask==3.0.2
 requests==2.31.0
 newspaper3k==0.2.8
-torch==2.2.1
 beautifulsoup4==4.12.3
 newsapi-python==0.2.7
 python-dotenv==1.0.1
