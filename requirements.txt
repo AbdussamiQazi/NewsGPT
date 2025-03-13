@@ -1,6 +1,5 @@
 Flask==3.0.2
 requests==2.31.0
-transformers==4.46.0
 newspaper3k==0.2.8
 torch==2.2.1
 beautifulsoup4==4.12.3
