@@ -2,7 +2,6 @@ import os
 import requests
 from flask import Flask, render_template, request, flash
 from bs4 import BeautifulSoup
-from transformers import pipeline
 from newspaper import Article
 from dotenv import load_dotenv
 
@@ -12,8 +11,11 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "your_secret_key")
 
-# Load Summarization Model (lighter model for Render)
-summarizer = pipeline('summarization', model="sshleifer/distilbart-cnn-12-6")
+# Hugging Face Inference API configuration
+HUGGINGFACE_API_TOKEN = os.getenv("HUGGINGFACE_API_TOKEN", "")
+API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-cnn"
+
+headers = {"Authorization": f"Bearer {HUGGINGFACE_API_TOKEN}"}
 
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 
@@ -57,18 +59,25 @@ def fetch_article_content(url):
         return "Content not available.", None
 
 def summarize_text(text):
-    """Summarize the article content"""
+    """Summarize the article content using Hugging Face Inference API"""
+    # Remove word count restriction; summarize regardless of length
+    truncated_text = " ".join(text.split()[:512])  # Still truncate to avoid API input limits
+    input_text = truncated_text  # BART doesn't require "summarize:" prefix
     word_count = len(text.split())
-    if word_count < 50:
-        return "Summary not available due to insufficient content."
+    max_len = max(30, min(140, word_count // 2)) if word_count > 10 else 20  # Adjust max_len for very short texts
 
-    truncated_text = " ".join(text.split()[:512])
-    max_len = max(30, min(140, word_count // 2))
     try:
-        summary = summarizer(truncated_text, max_length=max_len, min_length=max(20, max_len // 2), do_sample=False)
-        return summary[0]['summary_text']
-    except Exception:
-        return text[:200] + "..."  # Fallback to a snippet
+        response = requests.post(API_URL, headers=headers, json={"inputs": input_text, "parameters": {"max_length": max_len, "min_length": max(10, max_len // 2), "do_sample": False}})
+        response.raise_for_status()
+        summary = response.json()
+        if isinstance(summary, str):
+            return summary
+        elif isinstance(summary, list) and len(summary) > 0:
+            return summary[0]["summary_text"]
+        else:
+            return "Summary unavailable."
+    except requests.RequestException as e:
+        return f"Summary unavailable: {str(e)}"
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
