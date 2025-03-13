@@ -1,9 +1,15 @@
 import os
+import logging
+import requests
 from flask import Flask, render_template, request, flash
 from bs4 import BeautifulSoup
 from newspaper import Article
 from transformers import BartForConditionalGeneration, BartTokenizer
 from dotenv import load_dotenv
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -11,18 +17,30 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "your_secret_key")
 
-# Load DistilBART model and tokenizer at startup
-MODEL_NAME = "sshleifer/distilbart-cnn-12-6"
-print(f"Loading model: {MODEL_NAME}")
-tokenizer = BartTokenizer.from_pretrained(MODEL_NAME)
-model = BartForConditionalGeneration.from_pretrained(MODEL_NAME)
-print("Model loaded successfully")
+# Lazy-load DistilBART model and tokenizer
+MODEL_NAME = "sshleifer/distilbart-cnn-6-6"  # Even smaller than 12-6 (~300 MB)
+model = None
+tokenizer = None
 
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+
+def load_model():
+    """Load the model and tokenizer lazily"""
+    global model, tokenizer
+    if model is None or tokenizer is None:
+        logger.info(f"Loading model: {MODEL_NAME}")
+        try:
+            tokenizer = BartTokenizer.from_pretrained(MODEL_NAME)
+            model = BartForConditionalGeneration.from_pretrained(MODEL_NAME)
+            logger.info("Model loaded successfully")
+        except Exception as e:
+            logger.error(f"Failed to load model: {str(e)}")
+            raise
 
 def fetch_articles(query=""):
     """Fetch top news articles or based on search query"""
     if not NEWS_API_KEY:
+        logger.error("News API key is missing.")
         flash("News API key is missing.", "danger")
         return []
     
@@ -30,79 +48,93 @@ def fetch_articles(query=""):
            f"https://newsapi.org/v2/everything?q=india&language=en&apiKey={NEWS_API_KEY}")
 
     try:
-        import requests
-        response = requests.get(url)
-        print("Status Code:", response.status_code)
+        response = requests.get(url, timeout=10)  # Add timeout for reliability
+        logger.info(f"Fetching articles from {url}, Status Code: {response.status_code}")
         response.raise_for_status()
         data = response.json()
 
         if data.get("status") != "ok":
+            logger.error(f"API error: {data.get('message', 'Unknown error')}")
             flash(f"API error: {data.get('message', 'Unknown error')}", "danger")
             return []
 
         articles = data.get("articles", [])[:6]
         if not articles:
+            logger.warning("No articles found for this query.")
             flash("No articles found for this query.", "warning")
         return articles
     except requests.RequestException as e:
+        logger.error(f"Error fetching articles: {str(e)}")
         flash(f"Error fetching articles: {str(e)}", "danger")
         return []
 
 def fetch_article_content(url):
     """Extract article content and image"""
-    article = Article(url)
     try:
+        article = Article(url)
         article.download()
         article.parse()
-        return article.text.strip(), article.top_image
-    except Exception:
+        text = article.text.strip()
+        image = article.top_image or "https://via.placeholder.com/150"
+        return text[:2000], image  # Limit text size to save memory
+    except Exception as e:
+        logger.error(f"Error fetching content from {url}: {str(e)}")
         return "Content not available.", None
 
 def summarize_text(text):
     """Summarize the article content using local DistilBART model"""
+    load_model()  # Ensure model is loaded
     try:
-        truncated_text = " ".join(text.split()[:512])  # Limit input size
-        inputs = tokenizer(truncated_text, return_tensors="pt", max_length=1024, truncation=True)
+        truncated_text = " ".join(text.split()[:256])  # Reduce input size
+        inputs = tokenizer(truncated_text, return_tensors="pt", max_length=512, truncation=True)
         word_count = len(text.split())
-        max_len = max(30, min(140, word_count // 2)) if word_count > 10 else 20
+        max_len = max(20, min(100, word_count // 3))  # Tighter summary length
 
         summary_ids = model.generate(
             inputs["input_ids"],
             max_length=max_len,
             min_length=max(10, max_len // 2),
             do_sample=False,
-            num_beams=4,  # Beam search for better quality
+            num_beams=2,  # Reduce beams for speed/memory
             early_stopping=True
         )
         summary = tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+        logger.info("Summary generated successfully")
         return summary
     except Exception as e:
-        print(f"Error summarizing text: {str(e)}")
+        logger.error(f"Error summarizing text: {str(e)}")
         return "Summary unavailable."
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
     """Render homepage with news articles"""
-    search_query = request.form.get("search", "").strip().lower() if request.method == 'POST' else ""
-    
-    articles = fetch_articles(search_query if search_query else "")
-    summaries = []
+    try:
+        search_query = request.form.get("search", "").strip().lower() if request.method == 'POST' else ""
+        logger.info(f"Processing request with search query: {search_query}")
+        
+        articles = fetch_articles(search_query if search_query else "")
+        summaries = []
 
-    for entry in articles:
-        content, image = fetch_article_content(entry['url'])
-        summary = summarize_text(content)
+        for entry in articles:
+            content, image = fetch_article_content(entry['url'])
+            summary = summarize_text(content) if content else "No summary available."
 
-        summaries.append({
-            'title': entry.get('title', 'No Title'),
-            'image': image or "https://via.placeholder.com/150",
-            'link': entry.get('url', ''),
-            'summary': summary,
-            'source': entry.get('source', {}).get('name', 'Unknown'),
-            'published': entry.get('publishedAt', 'Unknown'),
-        })
+            summaries.append({
+                'title': entry.get('title', 'No Title'),
+                'image': image,
+                'link': entry.get('url', ''),
+                'summary': summary,
+                'source': entry.get('source', {}).get('name', 'Unknown'),
+                'published': entry.get('publishedAt', 'Unknown'),
+            })
 
-    return render_template('index.html', articles=summaries, search_query=search_query)
+        return render_template('index.html', articles=summaries, search_query=search_query)
+    except Exception as e:
+        logger.error(f"Error in index route: {str(e)}")
+        flash("An unexpected error occurred.", "danger")
+        return render_template('index.html', articles=[], search_query="")
 
 if __name__ == '__main__':
-    port = int(os.getenv("PORT", 5000))  # Use Render's PORT or default to 5000 locally
-    app.run(host="0.0.0.0", port=port, debug=False)  # Bind to 0.0.0.0 for external access
+    port = int(os.getenv("PORT", 5000))
+    logger.info(f"Starting app on port {port}")
+    app.run(host="0.0.0.0", port=port, debug=False)
