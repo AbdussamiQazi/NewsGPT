@@ -12,7 +12,7 @@ app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "your_secret_key")
 
 # Load DistilBART model and tokenizer at startup
-MODEL_NAME = "sshleifer/distilbart-cnn-6-6"
+MODEL_NAME = "sshleifer/distilbart-cnn-12-6"
 print(f"Loading model: {MODEL_NAME}")
 tokenizer = BartTokenizer.from_pretrained(MODEL_NAME)
 model = BartForConditionalGeneration.from_pretrained(MODEL_NAME)
