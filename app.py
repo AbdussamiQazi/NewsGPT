@@ -1,6 +1,7 @@
 import os
 import logging
 import requests
+import nltk
 from flask import Flask, render_template, request, flash
 from bs4 import BeautifulSoup
 from newspaper import Article
@@ -15,6 +16,14 @@ logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
+
+# Download NLTK punkt_tab data if not present
+try:
+    nltk.data.find('tokenizers/punkt_tab')
+except LookupError:
+    logger.info("Downloading NLTK punkt_tab data...")
+    nltk.download('punkt_tab', quiet=True)
+    logger.info("NLTK punkt_tab data downloaded successfully")
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "your_secret_key")
