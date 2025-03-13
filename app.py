@@ -30,17 +30,15 @@ def fetch_articles(query=""):
 
     try:
         response = requests.get(url)
-        #print("API URL:", url)
         print("Status Code:", response.status_code)
         response.raise_for_status()
         data = response.json()
-        #print("API Response:", data)
 
         if data.get("status") != "ok":
             flash(f"API error: {data.get('message', 'Unknown error')}", "danger")
             return []
 
-        articles = data.get("articles", [])[:10]
+        articles = data.get("articles", [])[:6]
         if not articles:
             flash("No articles found for this query.", "warning")
         return articles
@@ -60,11 +58,10 @@ def fetch_article_content(url):
 
 def summarize_text(text):
     """Summarize the article content using Hugging Face Inference API"""
-    # Remove word count restriction; summarize regardless of length
-    truncated_text = " ".join(text.split()[:512])  # Still truncate to avoid API input limits
-    input_text = truncated_text  # BART doesn't require "summarize:" prefix
+    truncated_text = " ".join(text.split()[:512])  # Truncate to avoid API input limits
+    input_text = truncated_text
     word_count = len(text.split())
-    max_len = max(30, min(140, word_count // 2)) if word_count > 10 else 20  # Adjust max_len for very short texts
+    max_len = max(30, min(140, word_count // 2)) if word_count > 10 else 20
 
     try:
         response = requests.post(API_URL, headers=headers, json={"inputs": input_text, "parameters": {"max_length": max_len, "min_length": max(10, max_len // 2), "do_sample": False}})
@@ -103,5 +100,5 @@ def index():
     return render_template('index.html', articles=summaries, search_query=search_query)
 
 if __name__ == '__main__':
-    port = int(os.getenv("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=True, use_reloader=False)
+    port = int(os.getenv("PORT", 5000))  # Use Render's PORT or default to 5000 locally
+    app.run(host="0.0.0.0", port=port, debug=False)  # Bind to 0.0.0.0 for external access
